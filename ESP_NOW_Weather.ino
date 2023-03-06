@@ -110,9 +110,14 @@ const char url[]= "https://wttr.in/?format=j1";
 #include "uv_icon.h"
 #include "hand.h"
 #include "co2_icon.h"
-
+#include "emoji0.h"
+#include "emoji1.h"
+#include "emoji2.h"
+#include "emoji3.h"
+#include "emoji4.h"
 ONE_BIT_DISPLAY obd;
 static uint8_t ucBuffer[(400*320)/4]; // 2 bit planes for black and red
+const uint8_t *pEmojis[5] = {emoji0, emoji1, emoji2, emoji3, emoji4};
 // LaskaKit ESPInk settings
 #define LASKA_KIT
 #define CS_PIN 5
@@ -437,6 +442,12 @@ void ShowWeather(void)
     obd.print(myWeather.u8OutdoorHumidity, DEC);
     obd.setCursor(306, 228);
     obd.print(myWeather.u16CO2, DEC);
+    // Display the CO2 emoji appropriate for the current CO2 level
+    j = myWeather.u16CO2/750; // each CO2 category is 750ppm
+    // 0-749 = 0, 750-1499 = 1, 1500=2249=2, 2250-2999=3, 3000+ = 4
+    if (j < 0) j = 0;
+    else if (j > 4) j = 4; 
+    obd.loadBMP((uint8_t *)pEmojis[j], 328, 232, OBD_WHITE, OBD_RED);
     obd.setCursor(228,36);
     obd.print(myWeather.u8Wind, DEC);
     obd.print(" kph");
