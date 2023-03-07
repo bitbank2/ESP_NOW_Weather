@@ -72,7 +72,8 @@
 //
 #include <esp_now.h>
 #include <WiFi.h>
-#ifdef ARDUINO_M5Stack_ATOMS3
+#if defined( ARDUINO_M5Stack_ATOMS3 ) || defined(ARDUINO_M5Stick_C)
+#define SERVER_SIDE
 #include <bb_spi_lcd.h>
 #include <esp_wifi.h>
 #include <SCD41.h>
@@ -87,18 +88,54 @@ BB_SPI_LCD lcd;
 SCD41 mySensor;
 bool bHasSCD4x = false;
 const char url[]= "https://wttr.in/?format=j1";
+#ifdef ARDUINO_M5Stick_C
+#define LCD_TYPE DISPLAY_M5STACK_STICKCPLUS
+// GROVE I2C
+#define SDA_PIN 32
+#define SCL_PIN 33
+#define BITBANG 1
+#define BUTTON_USER 39
+#define RTC_SDA_PIN 21 
+#define RTC_SCL_PIN 22
+#include "rtc_eeprom.h"
+const bool bHasRTC = true;
+#else // AtomS3
+#define LCD_TYPE DISPLAY_M5STACK_ATOMS3
+// GROVE I2C
 #define SDA_PIN 2
 #define SCL_PIN 1
+#define RTC_SDA_PIN -1
+#define RTC_SCL_PIN -1
 #define BITBANG 1
 #define BUTTON_USER 41
+const bool bHasRTC = false;
+#endif // AtomS3/STICKC_Plus
 
 #else // e-paper controller
-
 #include <OneBitDisplay.h>
-#include "Roboto_Black_50.h"
-#include "Roboto_Black_28.h"
+ONE_BIT_DISPLAY obd;
+#include "emoji0.h"
+#include "emoji1.h"
+#include "emoji2.h"
+#include "emoji3.h"
+#include "emoji4.h"
+const uint8_t *pEmojis[5] = {emoji0, emoji1, emoji2, emoji3, emoji4};
 #include "Roboto_Black_40.h"
 #include "Roboto_Black_20.h"
+
+#ifdef ARDUINO_FEATHERS3
+// Feather S3 is connected to a ST7302 low power LCD
+// for displaying the time and CO2/Temp/Humidity
+#define LCD_FREQ 8000000
+#define CS_PIN 7
+#define DC_PIN 3
+#define RST_PIN 1
+#include "Roboto_Black_80.h"
+
+#else // LASKAKIT_ESPINK
+
+#include "Roboto_Black_50.h"
+#include "Roboto_Black_28.h"
 #include "Roboto_25.h"
 // black and white graphics
 #include "humidity.h"
@@ -110,14 +147,7 @@ const char url[]= "https://wttr.in/?format=j1";
 #include "uv_icon.h"
 #include "hand.h"
 #include "co2_icon.h"
-#include "emoji0.h"
-#include "emoji1.h"
-#include "emoji2.h"
-#include "emoji3.h"
-#include "emoji4.h"
-ONE_BIT_DISPLAY obd;
 static uint8_t ucBuffer[(400*320)/4]; // 2 bit planes for black and red
-const uint8_t *pEmojis[5] = {emoji0, emoji1, emoji2, emoji3, emoji4};
 // LaskaKit ESPInk settings
 #define LASKA_KIT
 #define CS_PIN 5
@@ -129,6 +159,7 @@ const uint8_t *pEmojis[5] = {emoji0, emoji1, emoji2, emoji3, emoji4};
 #define EPD_TYPE EPD42R2_400x300
 #define POWER_PIN 2
 #define EPD_FREQ 8000000
+#endif // !FEATHERS3
 #endif // !AtomS3
 
 // Compact representation of current conditions
@@ -139,7 +170,8 @@ typedef struct tagWeather
   int16_t i16OutdoorTemp;
   uint8_t u8IndoorHumidity;
   uint8_t u8OutdoorHumidity;
-  uint32_t u32CurrentTime; // GMT epoch time
+  uint32_t u32CurrentTime; // current GMT epoch time
+  uint32_t u32WeatherTime; // GMT time the weather info was last gathered
   uint8_t u8SunsetHour;
   uint8_t u8SunsetMin;
   uint8_t u8SunriseHour;
@@ -204,7 +236,7 @@ void RFEnd(void)
   WiFi.mode(WIFI_OFF);
 } /* RFEnd() */
 
-#ifndef ARDUINO_M5Stack_ATOMS3
+#ifndef SERVER_SIDE
 int batteryVoltage(void)
 {
 int i;
@@ -237,6 +269,54 @@ v = 4.00f; // DEBUG
 #endif
   return (int)(v * 1000.0f); // return V in millivolts
 } /* batteryVoltage() */
+
+#ifdef ARDUINO_FEATHERS3
+void ShowTime(void)
+{
+struct tm myTime;
+char szTemp[128];
+int i;
+
+  // Display the latest time we got from the ESP-NOW server
+  obd.fillScreen(OBD_WHITE);
+  memcpy(&myTime, gmtime ((time_t *)&myWeather.u32CurrentTime), sizeof(myTime));
+  sprintf(szTemp,"%02d:%02d", myTime.tm_hour, myTime.tm_min);
+//  Serial.println(szTemp);
+  obd.setFreeFont(&Roboto_Black_80);
+  obd.setCursor(30, 118);
+  obd.print(szTemp); // show time
+
+  obd.setFreeFont(&Roboto_Black_20);
+  obd.setCursor(8,18);
+  obd.print("CO2");
+//  lcd.setFreeFont(&Roboto_Black_20);
+//  lcd.print("2   ");
+  obd.setCursor(72,18);
+  sprintf(szTemp, "%d", myWeather.u16CO2);
+//  lcd.setFreeFont(&Roboto_Black_40);
+  obd.print(szTemp);
+  sprintf(szTemp, "%dC", myWeather.i16IndoorTemp/10);
+  obd.setCursor(8,36);
+  obd.print("Temp");
+  obd.setCursor(72, 36);
+  obd.print(szTemp);
+  sprintf(szTemp, "%d%%", myWeather.u8IndoorHumidity);
+  obd.setCursor(8,54);
+  obd.print("Hum");
+  obd.setCursor(72,54);
+  obd.print(szTemp);
+  // Display the CO2 emoji appropriate for the current CO2 level
+  i = myWeather.u16CO2/750; // each CO2 category is 750ppm
+  // 0-749 = 0, 750-1499 = 1, 1500=2249=2, 2250-2999=3, 3000+ = 4
+  if (i < 0) i = 0;
+  else if (i > 4) i = 4; 
+  obd.loadBMP((uint8_t *)pEmojis[i], 140, 8, OBD_WHITE, OBD_BLACK);
+
+  obd.display();
+} /* ShowTime() */
+
+#else // LASKAKIT ESPINK
+
 void startEPD(void)
 {
   if (POWER_PIN != -1) {
@@ -363,7 +443,7 @@ void ShowWeather(void)
   obd.print(szTemp);
 
   // show the update time+date
-  struct tm *ptm = gmtime ((time_t *)&myWeather.u32CurrentTime);
+  struct tm *ptm = gmtime ((time_t *)&myWeather.u32WeatherTime);
   sprintf(szTemp, "Updated %02d/%02d/%04d %02d:%02d", ptm->tm_mday, ptm->tm_mon+1, ptm->tm_year+1900, ptm->tm_hour, ptm->tm_min);
   obd.setCursor(obd.width() - (j*strlen(szTemp)),obd.height()-8);
   obd.setTextColor(OBD_BLACK, OBD_WHITE);
@@ -463,9 +543,10 @@ void ShowWeather(void)
     return;
   }
 } /* ShowWeather() */
+#endif // !ARDUINO_FEATHERS3
 #endif // !AtomS3
 
-#ifdef ARDUINO_M5Stack_ATOMS3
+#ifdef SERVER_SIDE
 //
 // Use the WiFiManager to ask the user for their credentials
 // and then connect without asking in future sessions
@@ -522,7 +603,7 @@ void GetNewData(void)
 {
   int iTimeout = 0;
   int httpCode = -1;
-
+  struct tm myTime;
   lcd.setCursor(0,48);
   lcd.setTextColor(0x7e0,0);
   lcd.println("Connect WiFi");
@@ -532,8 +613,13 @@ void GetNewData(void)
   timeClient.begin();
   timeClient.setTimeOffset(0);  // GMT
   timeClient.update();
-  myWeather.u32CurrentTime = timeClient.getEpochTime();
+  myWeather.u32WeatherTime = timeClient.getEpochTime();
   timeClient.end(); // no longer needed
+  if (bHasRTC) {
+    // set the RTC from the NTP time
+    memcpy(&myTime, gmtime ((time_t *)&myWeather.u32WeatherTime), sizeof(myTime));
+    rtcSetTime(&myTime);
+  }
   // Get the weather info
    http.begin(url);
    httpCode = http.GET();  //send GET request
@@ -608,7 +694,7 @@ void GetNewData(void)
        lcd.setTextColor(0x1f,0);
        lcd.println("Latest Weather");
        lcd.setTextColor(0x7e0,0);
-       struct tm *ptm = gmtime ((time_t *)&myWeather.u32CurrentTime);
+       struct tm *ptm = gmtime ((time_t *)&myWeather.u32WeatherTime);
        lcd.printf("%02d:%02d:%02d", ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
      } else { // got weather info
        lcd.setCursor(0,64);
@@ -646,10 +732,13 @@ void deepSleep(uint64_t time_in_ms)
 
 void setup() {
 
-#ifdef ARDUINO_M5Stack_ATOMS3
+#ifdef SERVER_SIDE
 // Weather Server side
+  if (bHasRTC) {
+    rtcInit(RTC_PCF8563, RTC_SDA_PIN, RTC_SCL_PIN, 1);
+  }
   pinMode(BUTTON_USER, INPUT);
-  lcd.begin(DISPLAY_M5STACK_ATOMS3);
+  lcd.begin(LCD_TYPE);
   lcd.fillScreen(0);
   lcd.setFont(FONT_8x8);
   lcd.setTextColor(0x1f,0);
@@ -666,6 +755,13 @@ void setup() {
       myWeather.u8IndoorHumidity = 0;
       myWeather.u16CO2 = 0;
   }
+#else
+#ifdef ARDUINO_FEATHERS3
+  obd.setSPIPins(CS_PIN, -1, -1, DC_PIN, RST_PIN);
+  obd.SPIbegin(LCD_ST7302, LCD_FREQ); // 8Mhz is fast enough
+  obd.allocBuffer();
+  obd.fillScreen(OBD_WHITE);
+#endif // FEATHERS3
 #endif
 } /* setup() */
 
@@ -674,7 +770,7 @@ void loop() {
   int iTimeout;
   esp_err_t result;
  
- #ifdef ARDUINO_M5Stack_ATOMS3
+ #ifdef SERVER_SIDE
  start_over:
    RFBegin();
    // Register peer
@@ -687,7 +783,7 @@ void loop() {
   // listen for a ping from the battery powered device
    bGotResponse = false;
  while (1) { // do this forever
-   vTaskDelay(1);
+   vTaskDelay(10);
    lTime++;    
    if (bGotResponse && iDataLen == 2 && ucPacket[0] == 0x55 && ucPacket[1] == 0xaa) {
        // Data request from peer, send a response
@@ -699,7 +795,7 @@ void loop() {
          lcd.setTextColor(0xf81f, 0);
          lcd.print("Sent Data");
    } // data request
-   if (bHasSCD4x && (lTime & 511) == 0) { // 5 seconds
+   if (bHasSCD4x && (lTime & 0x1ff) == 0) { // 5 seconds
         mySensor.getSample(); // request the next sample
         lcd.setCursor(0,16);
         lcd.setTextColor(0xffff, 0);
@@ -711,6 +807,13 @@ void loop() {
         myWeather.i16IndoorTemp = mySensor.temperature() * 10;
         myWeather.u8IndoorHumidity = mySensor.humidity();
         myWeather.u16CO2 = mySensor.co2();
+        if (bHasRTC) { // update the current time when we update the CO2 data
+          struct tm myTime;
+          rtcGetTime(&myTime);
+          myWeather.u32CurrentTime = mktime(&myTime);
+          lcd.setCursor(0,40);
+          lcd.printf("%02d:%02d:%02d", myTime.tm_hour, myTime.tm_min, myTime.tm_sec);          
+        }
     } // 5 second CO2 update
   if ((lTime & 0x3ffff) == 0) { // about every 43 minutes
     // Get the correct time and weather data
@@ -719,7 +822,7 @@ void loop() {
   }
 } // while (1)
 
-#else // battery powered ESP32 device (w/e-paper display)
+#else // battery powered ESP32 device
 
 // Get the latest weather info from the peer device, then sleep for an hour
   // Send a ping to the "always listening" device
@@ -744,9 +847,17 @@ void loop() {
   RFEnd();
   if (bGotResponse) { // display the new data
      memcpy(&myWeather, ucPacket, sizeof(myWeather));
+#ifdef ARDUINO_FEATHERS3
+     ShowTime();
+#else // LASKAKIT ESPINK
      ShowWeather();
+#endif
   }
+#ifdef ARDUINO_FEATHERS3
+  deepSleep(60000); // show new time once per minute
+#else
   lightSleep(1000); // allow EPD to finish final cycle
   deepSleep(3600000); // sleep for an hour
+#endif // !FEATHERS3
 #endif
 } /* loop() */
