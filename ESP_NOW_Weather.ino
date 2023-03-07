@@ -126,7 +126,7 @@ const uint8_t *pEmojis[5] = {emoji0, emoji1, emoji2, emoji3, emoji4};
 #ifdef ARDUINO_FEATHERS3
 // Feather S3 is connected to a ST7302 low power LCD
 // for displaying the time and CO2/Temp/Humidity
-#define LCD_FREQ 8000000
+#define LCD_FREQ 20000000
 #define CS_PIN 7
 #define DC_PIN 3
 #define RST_PIN 1
@@ -156,7 +156,7 @@ static uint8_t ucBuffer[(400*320)/4]; // 2 bit planes for black and red
 #define RST_PIN 16
 #define MOSI_PIN 23
 #define SCK_PIN 18
-#define EPD_TYPE EPD42R2_400x300
+#define EPD_TYPE EPD29R_128x296
 #define POWER_PIN 2
 #define EPD_FREQ 8000000
 #endif // !FEATHERS3
@@ -718,15 +718,14 @@ void lightSleep(uint64_t time_in_ms)
 
 void deepSleep(uint64_t time_in_ms)
 {
+  if (POWER_PIN != -1) {
+    digitalWrite(POWER_PIN, 0);
+  }
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF); // hibernation mode - only RTC powered
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
   esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL,         ESP_PD_OPTION_OFF);
   esp_sleep_enable_timer_wakeup(time_in_ms * 1000L);
-//  if (POWER_PIN == -1) { // no power cutoff pin, need to hold RESET high while in deep sleep
-//    gpio_hold_en((gpio_num_t)RST_PIN);
-//    gpio_deep_sleep_hold_en(); 
-//  }
   esp_deep_sleep_start();
 }
 
@@ -760,7 +759,6 @@ void setup() {
   obd.setSPIPins(CS_PIN, -1, -1, DC_PIN, RST_PIN);
   obd.SPIbegin(LCD_ST7302, LCD_FREQ); // 8Mhz is fast enough
   obd.allocBuffer();
-  obd.fillScreen(OBD_WHITE);
 #endif // FEATHERS3
 #endif
 } /* setup() */
